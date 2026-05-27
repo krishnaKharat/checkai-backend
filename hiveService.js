@@ -9,15 +9,21 @@ async function detectImage(buffer, mimetype) {
   const fd = new FormData();
   fd.append('image', buffer, { filename: 'upload.jpg', contentType: mimetype || 'image/jpeg' });
 
-  const res = await fetch('https://api.thehive.ai/api/v3/task/sync', {
+  const res = await fetch('https://api.thehive.ai/api/v2/task/sync', {
     method: 'POST',
-    headers: { 'Authorization': `Token ${HIVE_API_KEY}`, ...fd.getHeaders() },
+    headers: {
+      'Authorization': `Token ${HIVE_API_KEY}`,
+      ...fd.getHeaders()
+    },
     body: fd
   });
 
-  if (!res.ok) throw new Error(`Hive image API error: ${res.status}`);
-  const data = await res.json();
+  const text = await res.text();
+  console.log('[Hive image raw response]', text);
 
+  if (!res.ok) throw new Error(`Hive image API error: ${res.status} - ${text}`);
+
+  const data = JSON.parse(text);
   return parseHiveImageResult(data);
 }
 
@@ -26,22 +32,28 @@ async function detectVideo(buffer, mimetype) {
   const fd = new FormData();
   fd.append('video', buffer, { filename: 'upload.mp4', contentType: mimetype || 'video/mp4' });
 
-  // Submit async job
-  const submitRes = await fetch('https://api.thehive.ai/api/v3/task/async', {
+  const submitRes = await fetch('https://api.thehive.ai/api/v2/task/async', {
     method: 'POST',
-    headers: { 'Authorization': `Token ${HIVE_API_KEY}`, ...fd.getHeaders() },
+    headers: {
+      'Authorization': `Token ${HIVE_API_KEY}`,
+      ...fd.getHeaders()
+    },
     body: fd
   });
 
-  if (!submitRes.ok) throw new Error(`Hive video submit error: ${submitRes.status}`);
-  const submitData = await submitRes.json();
+  const submitText = await submitRes.text();
+  console.log('[Hive video submit raw]', submitText);
+
+  if (!submitRes.ok) throw new Error(`Hive video submit error: ${submitRes.status} - ${submitText}`);
+
+  const submitData = JSON.parse(submitText);
   const taskId = submitData?.status?.[0]?.task_id;
   if (!taskId) throw new Error('No task ID returned from Hive');
 
   // Poll for result (max 60s)
   for (let i = 0; i < 20; i++) {
     await new Promise(r => setTimeout(r, 3000));
-    const pollRes = await fetch(`https://api.thehive.ai/api/v3/task/${taskId}`, {
+    const pollRes = await fetch(`https://api.thehive.ai/api/v2/task/${taskId}`, {
       headers: { 'Authorization': `Token ${HIVE_API_KEY}` }
     });
     if (!pollRes.ok) continue;
@@ -56,9 +68,17 @@ async function detectVideo(buffer, mimetype) {
 // ── Result Parsers ────────────────────────────────────────────────────────────
 function parseHiveImageResult(data) {
   try {
+    console.log('[Hive parse] full data:', JSON.stringify(data).slice(0, 500));
     const classes = data?.status?.[0]?.response?.output?.[0]?.classes || [];
-    const aiGenerated = classes.find(c => c.class === 'ai_generated');
+    console.log('[Hive parse] classes:', JSON.stringify(classes));
+
+    const aiGenerated = classes.find(c =>
+      c.class === 'ai_generated' ||
+      c.class === 'yes' ||
+      c.class === 'ai-generated'
+    );
     const score = aiGenerated ? Math.round(aiGenerated.score * 100) : 0;
+
     return {
       type: 'image',
       aiScore: score,
@@ -67,7 +87,8 @@ function parseHiveImageResult(data) {
       details: classes.map(c => ({ label: c.class, score: Math.round(c.score * 100) })),
       raw: data
     };
-  } catch {
+  } catch (e) {
+    console.error('[Hive parse error]', e.message);
     return { type: 'image', aiScore: 0, humanScore: 100, verdict: 'Unknown', details: [], raw: data };
   }
 }
@@ -78,7 +99,10 @@ function parseHiveVideoResult(data) {
     let totalAI = 0, count = 0;
     frames.forEach(frame => {
       const classes = frame?.classes || [];
-      const aiGen = classes.find(c => c.class === 'ai_generated');
+      const aiGen = classes.find(c =>
+        c.class === 'ai_generated' ||
+        c.class === 'yes'
+      );
       if (aiGen) { totalAI += aiGen.score; count++; }
     });
     const score = count ? Math.round((totalAI / count) * 100) : 0;
@@ -90,7 +114,8 @@ function parseHiveVideoResult(data) {
       framesAnalyzed: count,
       raw: data
     };
-  } catch {
+  } catch (e) {
+    console.error('[Hive video parse error]', e.message);
     return { type: 'video', aiScore: 0, humanScore: 100, verdict: 'Unknown', framesAnalyzed: 0, raw: data };
   }
 }

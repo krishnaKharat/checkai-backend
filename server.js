@@ -7,6 +7,7 @@ const helmet    = require('helmet');
 const rateLimit = require('express-rate-limit');
 
 const app  = express();
+app.set('trust proxy', 1); // ADD THIS LINE
 const PORT = process.env.PORT || 3001;
 
 // Security
