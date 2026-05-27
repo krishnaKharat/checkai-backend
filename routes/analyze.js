@@ -107,9 +107,9 @@ async function detectImageWithHive(fileBuffer, mimeType, filename) {
 
   if (!res.ok) {
     const err = await res.text();
+    console.error('[Hive error response]', res.status, err);
     throw new Error('Detection service error');
-  }
-
+}
   const data   = await res.json();
   const output = data?.status?.[0]?.response?.output?.[0];
   if (!output) throw new Error('Detection service returned no result');
