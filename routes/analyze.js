@@ -99,7 +99,7 @@ async function detectImageWithHive(fileBuffer, mimeType, filename) {
     'https://api.thehive.ai/api/v3/hive/ai-generated-and-deepfake-content-detection',
     {
       method:  'POST',
-      headers: { Authorization: `Bearer ${process.env.HIVE_SECRET_KEY}`, ...fd.getHeaders() },
+      headers: { Authorization: `Token ${process.env.HIVE_API_KEY}`, ...fd.getHeaders() },
       body:    fd,
       signal:  AbortSignal.timeout(60000),
     }
