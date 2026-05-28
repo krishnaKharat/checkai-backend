@@ -3,16 +3,16 @@ const fetch = require('node-fetch');
 
 const COPYLEAKS_EMAIL  = process.env.COPYLEAKS_EMAIL;
 const COPYLEAKS_KEY    = process.env.COPYLEAKS_API_KEY;
+const BASE_AUTH        = 'https://id.copyleaks.com';
 const BASE             = 'https://api.copyleaks.com';
 
 let _token = null;
 let _tokenExpiry = 0;
 
-// ── Auth ─────────────────────────────────────────────────────────────────────
 async function getToken() {
   if (_token && Date.now() < _tokenExpiry) return _token;
 
-  const res = await fetch(`${BASE}/v3/account/login/api`, {
+  const res = await fetch(`${BASE_AUTH}/v3/account/login/api`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: COPYLEAKS_EMAIL, key: COPYLEAKS_KEY })
@@ -24,15 +24,11 @@ async function getToken() {
   return _token;
 }
 
-// ── Document Detection ────────────────────────────────────────────────────────
 async function detectDocument(buffer, filename, mimetype) {
   const token = await getToken();
   const scanId = `checkai-${Date.now()}`;
-
-  // Base64 encode the file
   const base64 = buffer.toString('base64');
 
-  // Submit for AI detection
   const submitRes = await fetch(`${BASE}/v3/writer-detector/${scanId}/check`, {
     method: 'PUT',
     headers: {
@@ -42,7 +38,6 @@ async function detectDocument(buffer, filename, mimetype) {
     body: JSON.stringify({
       base64: base64,
       filename: filename || 'document.pdf',
-      // Webhook not used; we poll
       sandbox: false
     })
   });
@@ -52,13 +47,12 @@ async function detectDocument(buffer, filename, mimetype) {
     throw new Error(`Copyleaks submit error: ${submitRes.status} - ${err}`);
   }
 
-  // Poll for result (max 120s)
   for (let i = 0; i < 24; i++) {
     await new Promise(r => setTimeout(r, 5000));
     const resultRes = await fetch(`${BASE}/v3/writer-detector/${scanId}/result`, {
       headers: { 'Authorization': `Bearer ${token}` }
     });
-    if (resultRes.status === 404) continue; // not ready yet
+    if (resultRes.status === 404) continue;
     if (!resultRes.ok) throw new Error(`Copyleaks result error: ${resultRes.status}`);
     const result = await resultRes.json();
     return parseCopyleaksResult(result, filename);
@@ -66,7 +60,6 @@ async function detectDocument(buffer, filename, mimetype) {
   throw new Error('Copyleaks document detection timed out');
 }
 
-// ── Result Parser ─────────────────────────────────────────────────────────────
 function parseCopyleaksResult(data, filename) {
   try {
     const summary = data?.summary;
