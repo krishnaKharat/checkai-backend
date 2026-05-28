@@ -43,10 +43,10 @@ async function detectTextWithSapling(text) {
   const totalSentences  = sentenceScores.length || 1;
 
   const signals = [
-    { name: 'Overall AI Probability',      value: aiScore,        percent: confidence },
-    { name: 'Sentence-Level Consistency',  value: avgSentenceAI,  percent: Math.round(avgSentenceAI * 100) },
-    { name: 'High-AI Sentence Ratio',      value: highAISentences / totalSentences, percent: Math.round((highAISentences / totalSentences) * 100) },
-    { name: 'Writing Pattern Analysis',    value: isAI ? Math.min(aiScore + 0.05, 1) : Math.max(aiScore - 0.05, 0), percent: Math.round(Math.min(Math.max(isAI ? (aiScore + 0.05) : (aiScore - 0.05), 0), 1) * 100) },
+    { name: 'Overall AI Probability',     value: aiScore,       percent: confidence },
+    { name: 'Sentence-Level Consistency', value: avgSentenceAI, percent: Math.round(avgSentenceAI * 100) },
+    { name: 'High-AI Sentence Ratio',     value: highAISentences / totalSentences, percent: Math.round((highAISentences / totalSentences) * 100) },
+    { name: 'Writing Pattern Analysis',   value: isAI ? Math.min(aiScore + 0.05, 1) : Math.max(aiScore - 0.05, 0), percent: Math.round(Math.min(Math.max(isAI ? (aiScore + 0.05) : (aiScore - 0.05), 0), 1) * 100) },
   ];
 
   return { confidence, verdict, isAI, signals, processingMs: 0, type: 'txt' };
@@ -56,15 +56,16 @@ async function detectImageWithHive(fileBuffer, mimeType, filename) {
   const fd = new FormData();
   fd.append('media', fileBuffer, { filename: filename || 'file', contentType: mimeType });
 
-  const credentials = Buffer.from(`${process.env.HIVE_API_KEY}:${process.env.HIVE_SECRET_KEY}`).toString('base64');
-
   const res = await fetch(
     'https://api.thehive.ai/api/v3/hive/ai-generated-and-deepfake-content-detection',
     {
       method:  'POST',
-      headers: { Authorization: `Basic ${credentials}`, ...fd.getHeaders() },
-      body:    fd,
-      signal:  AbortSignal.timeout(60000),
+      headers: {
+        Authorization: `Bearer ${process.env.HIVE_SECRET_KEY}`,
+        ...fd.getHeaders()
+      },
+      body:   fd,
+      signal: AbortSignal.timeout(60000),
     }
   );
 
@@ -74,19 +75,19 @@ async function detectImageWithHive(fileBuffer, mimeType, filename) {
     throw new Error('Detection service error');
   }
 
-  const data   = await res.json();
+  const data = await res.json();
   console.log('[Hive response]', JSON.stringify(data).slice(0, 500));
 
-  const output = data?.status?.[0]?.response?.output?.[0];
+  const output = data?.output?.[0];
   if (!output) throw new Error('Detection service returned no result');
 
   const classes = output.classes || [];
 
-  const aiClass    = classes.find(c => c.class === 'yes' || c.class === 'ai_generated') || classes[0];
-  const humanClass = classes.find(c => c.class === 'no'  || c.class === 'human');
+  const aiClass    = classes.find(c => c.class === 'ai_generated');
+  const humanClass = classes.find(c => c.class === 'not_ai_generated');
 
-  const aiScore  = aiClass?.score    ?? 0;
-  const humanSc  = humanClass?.score ?? (1 - aiScore);
+  const aiScore  = aiClass?.value    ?? 0;
+  const humanSc  = humanClass?.value ?? (1 - aiScore);
 
   const confidence = Math.round(aiScore * 100);
   const isAI       = aiScore >= 0.5;
@@ -98,8 +99,8 @@ async function detectImageWithHive(fileBuffer, mimeType, filename) {
 
   const signals = classes.slice(0, 6).map(c => ({
     name:    formatSignalName(c.class),
-    value:   c.score,
-    percent: Math.round(c.score * 100),
+    value:   c.value,
+    percent: Math.round(c.value * 100),
   }));
 
   return { confidence, verdict, isAI, signals, type: 'img' };
@@ -107,17 +108,17 @@ async function detectImageWithHive(fileBuffer, mimeType, filename) {
 
 function formatSignalName(cls) {
   const map = {
-    yes:              'AI Generated Probability',
-    no:               'Human Content Probability',
-    ai_generated:     'AI Generated Probability',
-    human:            'Human Content Probability',
-    deepfake:         'Deepfake Detection',
-    face_swap:        'Face Swap Detection',
-    gan:              'GAN Fingerprint',
-    diffusion:        'Diffusion Model Signature',
-    stable_diffusion: 'Stable Diffusion Pattern',
-    midjourney:       'Midjourney Pattern',
-    dall_e:           'DALL-E Pattern',
+    ai_generated:         'AI Generated Probability',
+    not_ai_generated:     'Human Content Probability',
+    deepfake:             'Deepfake Detection',
+    face_swap:            'Face Swap Detection',
+    gan:                  'GAN Fingerprint',
+    diffusion:            'Diffusion Model Signature',
+    stable_diffusion:     'Stable Diffusion Pattern',
+    midjourney:           'Midjourney Pattern',
+    dall_e:               'DALL-E Pattern',
+    ai_generated_audio:   'AI Generated Audio',
+    not_ai_generated_audio: 'Human Audio',
   };
   return map[cls] || cls.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
 }
