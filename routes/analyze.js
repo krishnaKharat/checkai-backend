@@ -7,6 +7,8 @@ const { checkLimit, trackUsage } = require('../services/usage');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 async function detectTextWithSapling(text) {
   const res = await fetch('https://api.sapling.ai/api/v1/aidetect', {
     method:  'POST',
@@ -83,11 +85,8 @@ async function detectImageWithHive(fileBuffer, mimeType, filename) {
 
   const classes = output.classes || [];
 
-  const aiClass    = classes.find(c => c.class === 'ai_generated');
-  const humanClass = classes.find(c => c.class === 'not_ai_generated');
-
-  const aiScore  = aiClass?.value    ?? 0;
-  const humanSc  = humanClass?.value ?? (1 - aiScore);
+  const aiClass = classes.find(c => c.class === 'ai_generated');
+  const aiScore = aiClass?.value ?? 0;
 
   const confidence = Math.round(aiScore * 100);
   const isAI       = aiScore >= 0.5;
@@ -108,36 +107,41 @@ async function detectImageWithHive(fileBuffer, mimeType, filename) {
 
 function formatSignalName(cls) {
   const map = {
-    ai_generated:         'AI Generated Probability',
-    not_ai_generated:     'Human Content Probability',
-    deepfake:             'Deepfake Detection',
-    face_swap:            'Face Swap Detection',
-    gan:                  'GAN Fingerprint',
-    diffusion:            'Diffusion Model Signature',
-    stable_diffusion:     'Stable Diffusion Pattern',
-    midjourney:           'Midjourney Pattern',
-    dall_e:               'DALL-E Pattern',
-    ai_generated_audio:   'AI Generated Audio',
+    ai_generated:           'AI Generated Probability',
+    not_ai_generated:       'Human Content Probability',
+    deepfake:               'Deepfake Detection',
+    face_swap:              'Face Swap Detection',
+    gan:                    'GAN Fingerprint',
+    diffusion:              'Diffusion Model Signature',
+    stable_diffusion:       'Stable Diffusion Pattern',
+    midjourney:             'Midjourney Pattern',
+    dall_e:                 'DALL-E Pattern',
+    ai_generated_audio:     'AI Generated Audio',
     not_ai_generated_audio: 'Human Audio',
   };
   return map[cls] || cls.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
 }
 
+// ── Auth helper ───────────────────────────────────────────────────────────────
+
+async function getUID(req) {
+  try {
+    const token = req.headers.authorization?.split('Bearer ')[1];
+    if (!token) return null;
+    const admin   = require('../middleware/auth');
+    const decoded = await admin.verifyIdToken(token);
+    return decoded.uid;
+  } catch {
+    return null;
+  }
+}
+
+// ── POST /api/analyze  (image, video, text) ───────────────────────────────────
+
 router.post('/', upload.single('file'), async (req, res) => {
   const start = Date.now();
-
   try {
-    let uid   = null;
-    let token = req.headers.authorization?.split('Bearer ')[1];
-
-    if (token) {
-      try {
-        const admin   = require('../middleware/auth');
-        const decoded = await admin.verifyIdToken(token);
-        uid = decoded.uid;
-      } catch { /* token invalid — treat as anonymous */ }
-    }
-
+    const uid         = await getUID(req);
     const limitResult = await checkLimit(uid);
     if (limitResult.blocked) {
       return res.status(429).json({
@@ -151,8 +155,8 @@ router.post('/', upload.single('file'), async (req, res) => {
 
     if (type === 'txt') {
       const text = (req.body.text || '').trim();
-      if (!text || text.length < 1) return res.status(400).json({ error: 'Please enter some text.' });
-      if (text.length > 200000)     return res.status(400).json({ error: 'Text too long. Maximum 200,000 characters.' });
+      if (!text)             return res.status(400).json({ error: 'Please enter some text.' });
+      if (text.length > 200000) return res.status(400).json({ error: 'Text too long. Maximum 200,000 characters.' });
       result = await detectTextWithSapling(text);
     }
 
@@ -167,10 +171,6 @@ router.post('/', upload.single('file'), async (req, res) => {
       result.type = 'vid';
     }
 
-    else if (type === 'doc') {
-      return res.status(400).json({ error: 'Document detection is coming soon.' });
-    }
-
     else {
       return res.status(400).json({ error: 'Invalid detection type.' });
     }
@@ -182,6 +182,146 @@ router.post('/', upload.single('file'), async (req, res) => {
   } catch (err) {
     console.error('[analyze error]', err.message);
     return res.status(500).json({ error: 'Analysis failed. Please try again.' });
+  }
+});
+
+// ── POST /api/analyze/document ────────────────────────────────────────────────
+
+router.post('/document', upload.single('document'), async (req, res) => {
+  const start = Date.now();
+  try {
+    const uid         = await getUID(req);
+    const limitResult = await checkLimit(uid);
+    if (limitResult.blocked) {
+      return res.status(429).json({
+        error:        'You have used all your scans for this month. Please upgrade to continue.',
+        limitReached: true,
+      });
+    }
+
+    if (!req.file) return res.status(400).json({ error: 'No document file provided.' });
+
+    const { detectDocument } = require('../services/copyleaksService');
+    const result = await detectDocument(req.file.buffer, req.file.originalname, req.file.mimetype);
+
+    await trackUsage(uid);
+    return res.json({
+      aiPercent:    result.aiScore,
+      humanPercent: result.humanScore,
+      label:        result.verdict,
+      processingMs: Date.now() - start,
+      sections:     result.sections,
+      wordsAnalyzed: result.wordsAnalyzed,
+    });
+
+  } catch (err) {
+    console.error('[document analyze error]', err.message);
+    return res.status(500).json({ error: 'Document analysis failed. Please try again.' });
+  }
+});
+
+// ── POST /api/analyze/video ───────────────────────────────────────────────────
+
+router.post('/video', upload.single('video'), async (req, res) => {
+  const start = Date.now();
+  try {
+    const uid         = await getUID(req);
+    const limitResult = await checkLimit(uid);
+    if (limitResult.blocked) {
+      return res.status(429).json({
+        error:        'You have used all your scans for this month. Please upgrade to continue.',
+        limitReached: true,
+      });
+    }
+
+    if (!req.file) return res.status(400).json({ error: 'No video file provided.' });
+
+    const result = await detectImageWithHive(req.file.buffer, 'image/jpeg', 'frame.jpg');
+
+    await trackUsage(uid);
+    return res.json({
+      aiPercent:   result.confidence,
+      label:       result.verdict,
+      isAI:        result.isAI,
+      signals:     result.signals,
+      processingMs: Date.now() - start,
+    });
+
+  } catch (err) {
+    console.error('[video analyze error]', err.message);
+    return res.status(500).json({ error: 'Video analysis failed. Please try again.' });
+  }
+});
+
+// ── POST /api/analyze/audio ───────────────────────────────────────────────────
+
+router.post('/audio', upload.single('audio'), async (req, res) => {
+  const start = Date.now();
+  try {
+    const uid         = await getUID(req);
+    const limitResult = await checkLimit(uid);
+    if (limitResult.blocked) {
+      return res.status(429).json({
+        error:        'You have used all your scans for this month. Please upgrade to continue.',
+        limitReached: true,
+      });
+    }
+
+    if (!req.file) return res.status(400).json({ error: 'No audio file provided.' });
+
+    // Use Hive for audio detection
+    const fd = new FormData();
+    fd.append('media', req.file.buffer, { filename: req.file.originalname, contentType: req.file.mimetype });
+
+    const res2 = await fetch(
+      'https://api.thehive.ai/api/v3/hive/ai-generated-and-deepfake-content-detection',
+      {
+        method:  'POST',
+        headers: { Authorization: `Bearer ${process.env.HIVE_SECRET_KEY}`, ...fd.getHeaders() },
+        body:    fd,
+        signal:  AbortSignal.timeout(120000),
+      }
+    );
+
+    if (!res2.ok) {
+      const err = await res2.text();
+      console.error('[Hive audio error]', res2.status, err);
+      throw new Error('Audio detection service error');
+    }
+
+    const data   = await res2.json();
+    const output = data?.output?.[0];
+    if (!output) throw new Error('No result from audio detection');
+
+    const classes    = output.classes || [];
+    const aiClass    = classes.find(c => c.class === 'ai_generated_audio' || c.class === 'ai_generated');
+    const aiScore    = aiClass?.value ?? 0;
+    const confidence = Math.round(aiScore * 100);
+    const isAI       = aiScore >= 0.5;
+
+    let verdict;
+    if (aiScore >= 0.75)      verdict = 'AI Generated';
+    else if (aiScore >= 0.45) verdict = 'Uncertain — Review Needed';
+    else                      verdict = 'Likely Human';
+
+    const signals = classes.slice(0, 6).map(c => ({
+      name:    formatSignalName(c.class),
+      value:   c.value,
+      percent: Math.round(c.value * 100),
+    }));
+
+    await trackUsage(uid);
+    return res.json({
+      aiPercent:   confidence,
+      label:       verdict,
+      isAI,
+      signals,
+      processingMs: Date.now() - start,
+    });
+
+  } catch (err) {
+    console.error('[audio analyze error]', err.message);
+    return res.status(500).json({ error: 'Audio analysis failed. Please try again.' });
   }
 });
 
