@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 require('dotenv').config();
 
 const express   = require('express');
@@ -43,7 +43,8 @@ app.get('/api/health', (req, res) => {
       sapling:    !!process.env.SAPLING_API_KEY,
       copyleaks:  !!(process.env.COPYLEAKS_EMAIL && process.env.COPYLEAKS_API_KEY),
       firebase:   !!process.env.FIREBASE_PROJECT_ID,
-      cashfree:   !!process.env.CASHFREE_APP_ID
+      cashfree:   !!process.env.CASHFREE_APP_ID,
+      googleFactCheck: !!process.env.GOOGLE_FACT_CHECK_API_KEY
     }
   });
 });

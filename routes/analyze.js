@@ -1,9 +1,10 @@
-const express  = require('express');
+﻿const express  = require('express');
 const multer   = require('multer');
 const fetch    = require('node-fetch');
 const FormData = require('form-data');
 const router   = express.Router();
 const { checkLimit, trackUsage } = require('../services/usage');
+const { analyzeNewsContent } = require('../services/newsDetectionService');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -325,4 +326,39 @@ router.post('/audio', upload.single('audio'), async (req, res) => {
   }
 });
 
+
+// POST /api/analyze/news
+router.post('/news', async (req, res) => {
+  const start = Date.now();
+  try {
+    const uid = await getUID(req);
+    const limitResult = await checkLimit(uid);
+    if (limitResult === false || limitResult.blocked) {
+      return res.status(429).json({
+        error: 'You have used all your scans for this month. Please upgrade to continue.',
+        limitReached: true,
+      });
+    }
+
+    const text = (req.body.text || '').trim();
+    const sourceUrl = (req.body.sourceUrl || '').trim();
+    const result = await analyzeNewsContent({ text, sourceUrl });
+    result.processingMs = Date.now() - start;
+
+    await trackUsage(uid, {
+      type: 'news',
+      name: text.slice(0, 140),
+      verdict: result.verdict,
+      confidence: result.confidence,
+      riskLevel: result.riskLevel,
+      sourceDomain: result.sourceCredibility?.domain || null
+    });
+
+    return res.json(result);
+  } catch (err) {
+    console.error('[news analyze error]', err.message);
+    const status = /too long|please enter/i.test(err.message) ? 400 : 500;
+    return res.status(status).json({ error: err.message || 'News analysis failed. Please try again.' });
+  }
+});
 module.exports = router;
