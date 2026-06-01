@@ -3,6 +3,7 @@
 // Falls back gracefully if Firestore not available
 
 function getDB() {
+  if (getDB.disabled) return null;
   try {
     const { admin } = require('../middleware/auth');
     if (admin && admin.apps.length) return admin.firestore();
@@ -35,6 +36,9 @@ async function checkLimit(uid) {
 
   } catch(err) {
     console.error('checkLimit error:', err.message);
+    if (/UNAUTHENTICATED|invalid authentication credentials/i.test(err.message)) {
+      getDB.disabled = true;
+    }
     return true; // on error = allow
   }
 }
@@ -79,6 +83,9 @@ async function trackUsage(uid, scanRecord) {
 
   } catch(err) {
     console.error('trackUsage error:', err.message);
+    if (/UNAUTHENTICATED|invalid authentication credentials/i.test(err.message)) {
+      getDB.disabled = true;
+    }
     // Non-fatal — don't crash the scan
   }
 }

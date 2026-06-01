@@ -46,6 +46,15 @@ function normalizeText(text) {
   return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
+function timeoutSignal(ms) {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(ms);
+  }
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms).unref?.();
+  return controller.signal;
+}
+
 function extractDomain(sourceUrl) {
   if (!sourceUrl) return null;
   try {
@@ -147,35 +156,41 @@ async function searchFactChecks(text) {
     pageSize: '5'
   });
 
-  const res = await fetch(`${FACT_CHECK_ENDPOINT}?${params.toString()}`, {
-    method: 'GET',
-    signal: AbortSignal.timeout(12000)
-  });
+  try {
+    const res = await fetch(`${FACT_CHECK_ENDPOINT}?${params.toString()}`, {
+      method: 'GET',
+      signal: timeoutSignal(12000)
+    });
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    console.error('[Google Fact Check error]', res.status, body.slice(0, 300));
-    return { enabled: true, error: 'Fact-check search failed', matches: [] };
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      console.error('[Google Fact Check error]', res.status, body.slice(0, 300));
+      return { enabled: true, error: 'Fact-check search failed', matches: [] };
+    }
+
+    const data = await res.json();
+    const claims = Array.isArray(data.claims) ? data.claims : [];
+    const matches = claims.flatMap(claim => {
+      const reviews = Array.isArray(claim.claimReview) ? claim.claimReview : [];
+      return reviews.map(review => ({
+        claim: claim.text || query,
+        claimant: claim.claimant || '',
+        claimDate: claim.claimDate || '',
+        organization: review.publisher?.name || 'Unknown fact-checker',
+        rating: review.textualRating || 'Unrated',
+        title: review.title || '',
+        url: review.url || '',
+        checkedAt: review.reviewDate || claim.claimDate || '',
+        score: ratingToScore(review.textualRating)
+      }));
+    }).slice(0, 5);
+
+    return { enabled: true, matches };
+  } catch (err) {
+    const reason = err.name === 'AbortError' ? 'Fact-check search timed out' : 'Fact-check search unavailable';
+    console.error('[Google Fact Check error]', reason, err.message);
+    return { enabled: true, error: reason, matches: [] };
   }
-
-  const data = await res.json();
-  const claims = Array.isArray(data.claims) ? data.claims : [];
-  const matches = claims.flatMap(claim => {
-    const reviews = Array.isArray(claim.claimReview) ? claim.claimReview : [];
-    return reviews.map(review => ({
-      claim: claim.text || query,
-      claimant: claim.claimant || '',
-      claimDate: claim.claimDate || '',
-      organization: review.publisher?.name || 'Unknown fact-checker',
-      rating: review.textualRating || 'Unrated',
-      title: review.title || '',
-      url: review.url || '',
-      checkedAt: review.reviewDate || claim.claimDate || '',
-      score: ratingToScore(review.textualRating)
-    }));
-  }).slice(0, 5);
-
-  return { enabled: true, matches };
 }
 
 function analyzeLanguage(text) {

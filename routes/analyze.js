@@ -129,8 +129,9 @@ async function getUID(req) {
   try {
     const token = req.headers.authorization?.split('Bearer ')[1];
     if (!token) return null;
-    const admin   = require('../middleware/auth');
-    const decoded = await admin.verifyIdToken(token);
+    const { admin } = require('../middleware/auth');
+    if (!admin.apps.length) return null;
+    const decoded = await admin.auth().verifyIdToken(token);
     return decoded.uid;
   } catch {
     return null;
@@ -144,7 +145,7 @@ router.post('/', upload.single('file'), async (req, res) => {
   try {
     const uid         = await getUID(req);
     const limitResult = await checkLimit(uid);
-    if (limitResult.blocked) {
+    if (limitResult === false || limitResult.blocked) {
       return res.status(429).json({
         error:        'You have used all your scans for this month. Please upgrade to continue.',
         limitReached: true,
@@ -193,7 +194,7 @@ router.post('/document', upload.single('document'), async (req, res) => {
   try {
     const uid         = await getUID(req);
     const limitResult = await checkLimit(uid);
-    if (limitResult.blocked) {
+    if (limitResult === false || limitResult.blocked) {
       return res.status(429).json({
         error:        'You have used all your scans for this month. Please upgrade to continue.',
         limitReached: true,
@@ -228,7 +229,7 @@ router.post('/video', upload.single('video'), async (req, res) => {
   try {
     const uid         = await getUID(req);
     const limitResult = await checkLimit(uid);
-    if (limitResult.blocked) {
+    if (limitResult === false || limitResult.blocked) {
       return res.status(429).json({
         error:        'You have used all your scans for this month. Please upgrade to continue.',
         limitReached: true,
@@ -261,7 +262,7 @@ router.post('/audio', upload.single('audio'), async (req, res) => {
   try {
     const uid         = await getUID(req);
     const limitResult = await checkLimit(uid);
-    if (limitResult.blocked) {
+    if (limitResult === false || limitResult.blocked) {
       return res.status(429).json({
         error:        'You have used all your scans for this month. Please upgrade to continue.',
         limitReached: true,
